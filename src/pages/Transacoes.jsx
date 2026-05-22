@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Check } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtimeTable } from '../hooks/useRealtimeTable'
 import { supabase } from '../lib/supabaseClient'
@@ -20,6 +20,7 @@ export default function Transacoes() {
   const [data, setData] = useState(new Date().toISOString().split('T')[0])
   const [parcelado, setParcelado] = useState(false)
   const [numParcelas, setNumParcelas] = useState('2')
+  const [efetivada, setEfetivada] = useState(true)
   const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
@@ -27,7 +28,6 @@ export default function Transacoes() {
     setSaving(true)
 
     if (parcelado && parseInt(numParcelas) > 1) {
-      // Criar várias transações (uma para cada mês)
       const totalParcelas = parseInt(numParcelas)
       const valorPorParcela = parseFloat(valor) / totalParcelas
       const grupoId = crypto.randomUUID()
@@ -46,20 +46,21 @@ export default function Transacoes() {
           criado_por: profile?.id,
           parcela_atual: i + 1,
           parcela_total: totalParcelas,
-          parcela_grupo_id: grupoId
+          parcela_grupo_id: grupoId,
+          efetivada: i === 0 ? efetivada : false
         })
       }
 
       await supabase.from('transacoes').insert(transacoesParaInserir)
     } else {
-      // Transação única
       await supabase.from('transacoes').insert({
         household_id: profile?.household_id,
         descricao,
         valor: parseFloat(valor),
         tipo,
         data,
-        criado_por: profile?.id
+        criado_por: profile?.id,
+        efetivada
       })
     }
 
@@ -69,6 +70,7 @@ export default function Transacoes() {
     setData(new Date().toISOString().split('T')[0])
     setParcelado(false)
     setNumParcelas('2')
+    setEfetivada(true)
     setSaving(false)
     setShowModal(false)
   }
@@ -85,10 +87,18 @@ export default function Transacoes() {
     }
   }
 
+  const togglePago = async (t) => {
+    await supabase
+      .from('transacoes')
+      .update({ efetivada: !t.efetivada })
+      .eq('id', t.id)
+  }
+
   const despesas = transacoes.filter(t => t.tipo === 'despesa')
   const receitas = transacoes.filter(t => t.tipo === 'receita')
   const totalDespesas = despesas.reduce((sum, t) => sum + t.valor, 0)
   const totalReceitas = receitas.reduce((sum, t) => sum + t.valor, 0)
+  const despesasPendentes = despesas.filter(t => !t.efetivada).reduce((sum, t) => sum + t.valor, 0)
 
   const getLancadorInfo = (criado_por) => {
     const lancador = profiles.find(p => p.id === criado_por)
@@ -116,10 +126,8 @@ export default function Transacoes() {
             <p className="text-base font-semibold mt-1 text-red-400">{formatCurrency(totalDespesas)}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Saldo</p>
-            <p className={`text-base font-semibold mt-1 ${totalReceitas - totalDespesas >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {formatCurrency(totalReceitas - totalDespesas)}
-            </p>
+            <p className="text-xs text-gray-400 uppercase tracking-wider">Pendente</p>
+            <p className="text-base font-semibold mt-1 text-amber-400">{formatCurrency(despesasPendentes)}</p>
           </div>
         </div>
       </div>
@@ -139,14 +147,31 @@ export default function Transacoes() {
                 return (
                   <div
                     key={t.id}
-                    className={`flex justify-between items-center p-4 ${index !== transacoes.length - 1 ? 'border-b border-gray-100' : ''}`}
+                    className={`flex justify-between items-center p-4 ${index !== transacoes.length - 1 ? 'border-b border-gray-100' : ''} ${!t.efetivada ? 'bg-amber-50' : ''}`}
                   >
+                    {/* Checkbox de pago */}
+                    <button
+                      onClick={() => togglePago(t)}
+                      className={`w-6 h-6 rounded-md border-2 flex items-center justify-center mr-3 transition ${
+                        t.efetivada
+                          ? 'bg-emerald-600 border-emerald-600'
+                          : 'bg-white border-gray-300 hover:border-emerald-600'
+                      }`}
+                    >
+                      {t.efetivada && <Check size={14} className="text-white" strokeWidth={3} />}
+                    </button>
+
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <p className="font-semibold text-gray-900 text-sm">{t.descricao}</p>
+                        <p className={`font-semibold text-sm ${t.efetivada ? 'text-gray-900' : 'text-gray-600'}`}>{t.descricao}</p>
                         <span className={`text-xs px-2 py-0.5 rounded ${lancador.bg} ${lancador.text} border ${lancador.border}`}>
                           {lancador.nome}
                         </span>
+                        {!t.efetivada && (
+                          <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 font-semibold">
+                            Pendente
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-gray-500">{formatDate(t.data)}</p>
                     </div>
@@ -239,6 +264,21 @@ export default function Transacoes() {
                 onChange={e => setData(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
               />
+            </div>
+
+            {/* Checkbox de já foi pago */}
+            <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+              <div>
+                <label className="text-sm font-semibold text-gray-700">Já foi pago?</label>
+                <p className="text-xs text-gray-500 mt-0.5">Desmarque se for uma despesa futura</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEfetivada(!efetivada)}
+                className={`relative w-12 h-6 rounded-full transition ${efetivada ? 'bg-emerald-600' : 'bg-gray-300'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition ${efetivada ? 'left-7' : 'left-1'}`} />
+              </button>
             </div>
 
             {/* Toggle parcelado */}
