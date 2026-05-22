@@ -18,29 +18,70 @@ export default function Transacoes() {
   const [valor, setValor] = useState('')
   const [tipo, setTipo] = useState('despesa')
   const [data, setData] = useState(new Date().toISOString().split('T')[0])
+  const [parcelado, setParcelado] = useState(false)
+  const [numParcelas, setNumParcelas] = useState('2')
+  const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
     if (!descricao || !valor) return
+    setSaving(true)
 
-    await supabase.from('transacoes').insert({
-      household_id: profile?.household_id,
-      descricao,
-      valor: parseFloat(valor),
-      tipo,
-      data,
-      criado_por: profile?.id
-    })
+    if (parcelado && parseInt(numParcelas) > 1) {
+      // Criar várias transações (uma para cada mês)
+      const totalParcelas = parseInt(numParcelas)
+      const valorPorParcela = parseFloat(valor) / totalParcelas
+      const grupoId = crypto.randomUUID()
+      const transacoesParaInserir = []
+
+      for (let i = 0; i < totalParcelas; i++) {
+        const dataParcela = new Date(data)
+        dataParcela.setMonth(dataParcela.getMonth() + i)
+
+        transacoesParaInserir.push({
+          household_id: profile?.household_id,
+          descricao: `${descricao} (${i + 1}/${totalParcelas})`,
+          valor: valorPorParcela,
+          tipo,
+          data: dataParcela.toISOString().split('T')[0],
+          criado_por: profile?.id,
+          parcela_atual: i + 1,
+          parcela_total: totalParcelas,
+          parcela_grupo_id: grupoId
+        })
+      }
+
+      await supabase.from('transacoes').insert(transacoesParaInserir)
+    } else {
+      // Transação única
+      await supabase.from('transacoes').insert({
+        household_id: profile?.household_id,
+        descricao,
+        valor: parseFloat(valor),
+        tipo,
+        data,
+        criado_por: profile?.id
+      })
+    }
 
     setDescricao('')
     setValor('')
     setTipo('despesa')
     setData(new Date().toISOString().split('T')[0])
+    setParcelado(false)
+    setNumParcelas('2')
+    setSaving(false)
     setShowModal(false)
   }
 
-  const handleDelete = async (id) => {
-    if (confirm('Tem certeza que quer deletar?')) {
-      await supabase.from('transacoes').delete().eq('id', id)
+  const handleDelete = async (t) => {
+    if (t.parcela_grupo_id) {
+      if (confirm(`Deletar TODAS as ${t.parcela_total} parcelas?`)) {
+        await supabase.from('transacoes').delete().eq('parcela_grupo_id', t.parcela_grupo_id)
+      }
+    } else {
+      if (confirm('Tem certeza que quer deletar?')) {
+        await supabase.from('transacoes').delete().eq('id', t.id)
+      }
     }
   }
 
@@ -62,7 +103,6 @@ export default function Transacoes() {
 
   return (
     <div className="pb-24 bg-gray-50 min-h-screen">
-      {/* Header */}
       <div className="bg-slate-900 text-white px-6 pt-8 pb-12">
         <h1 className="text-2xl font-semibold mb-6">Lançamentos</h1>
 
@@ -84,7 +124,6 @@ export default function Transacoes() {
         </div>
       </div>
 
-      {/* Lista de transações */}
       <div className="px-4 -mt-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           {transacoes.length === 0 ? (
@@ -103,7 +142,7 @@ export default function Transacoes() {
                     className={`flex justify-between items-center p-4 ${index !== transacoes.length - 1 ? 'border-b border-gray-100' : ''}`}
                   >
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <p className="font-semibold text-gray-900 text-sm">{t.descricao}</p>
                         <span className={`text-xs px-2 py-0.5 rounded ${lancador.bg} ${lancador.text} border ${lancador.border}`}>
                           {lancador.nome}
@@ -117,7 +156,7 @@ export default function Transacoes() {
                       </p>
                       {t.criado_por === profile?.id && (
                         <button
-                          onClick={() => handleDelete(t.id)}
+                          onClick={() => handleDelete(t)}
                           className="text-gray-400 hover:text-red-600 transition"
                         >
                           <Trash2 size={16} />
@@ -131,7 +170,6 @@ export default function Transacoes() {
         </div>
       </div>
 
-      {/* Botão flutuante */}
       <button
         onClick={() => setShowModal(true)}
         className="fixed bottom-24 right-4 bg-slate-900 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:bg-slate-800 transition"
@@ -139,10 +177,9 @@ export default function Transacoes() {
         <Plus size={24} />
       </button>
 
-      {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-end z-50">
-          <div className="bg-white w-full rounded-t-2xl p-6 space-y-4">
+          <div className="bg-white w-full rounded-t-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-semibold text-gray-900">Novo lançamento</h2>
 
             <div className="flex gap-2">
@@ -180,7 +217,9 @@ export default function Transacoes() {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Valor</label>
+              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                {parcelado ? 'Valor total' : 'Valor'}
+              </label>
               <input
                 type="number"
                 placeholder="0,00"
@@ -191,7 +230,9 @@ export default function Transacoes() {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Data</label>
+              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                {parcelado ? 'Data da 1ª parcela' : 'Data'}
+              </label>
               <input
                 type="date"
                 value={data}
@@ -199,6 +240,40 @@ export default function Transacoes() {
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
               />
             </div>
+
+            {/* Toggle parcelado */}
+            <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+              <label className="text-sm font-semibold text-gray-700">Parcelar?</label>
+              <button
+                type="button"
+                onClick={() => setParcelado(!parcelado)}
+                className={`relative w-12 h-6 rounded-full transition ${parcelado ? 'bg-slate-900' : 'bg-gray-300'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition ${parcelado ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+
+            {parcelado && (
+              <div className="space-y-3 bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <div>
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Número de parcelas</label>
+                  <input
+                    type="number"
+                    min="2"
+                    max="60"
+                    placeholder="Ex: 10"
+                    value={numParcelas}
+                    onChange={e => setNumParcelas(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
+                  />
+                </div>
+                {valor && numParcelas && (
+                  <p className="text-sm text-gray-700">
+                    <strong>{numParcelas}x</strong> de <strong>{formatCurrency(parseFloat(valor) / parseInt(numParcelas))}</strong>
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button
@@ -209,9 +284,10 @@ export default function Transacoes() {
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 py-3 bg-slate-900 text-white rounded-lg font-semibold hover:bg-slate-800 transition"
+                disabled={saving}
+                className="flex-1 py-3 bg-slate-900 text-white rounded-lg font-semibold hover:bg-slate-800 transition disabled:opacity-50"
               >
-                Salvar
+                {saving ? 'Salvando...' : 'Salvar'}
               </button>
             </div>
           </div>
