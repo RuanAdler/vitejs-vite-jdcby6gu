@@ -1,299 +1,345 @@
 import { useState } from 'react'
-import { Plus, Trash2, Check } from 'lucide-react'
+import { Plus, Trash2, Check, Pencil, Search } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtimeTable } from '../hooks/useRealtimeTable'
 import { supabase } from '../lib/supabaseClient'
 import { formatCurrency, formatDate } from '../lib/formatters'
+import { isInMonth, startOfMonth, ymd } from '../lib/finance'
+import MonthSelector from '../components/MonthSelector'
+import Modal from '../components/Modal'
+import ConfirmDialog from '../components/ConfirmDialog'
+import CurrencyInput from '../components/CurrencyInput'
+import { useToast } from '../components/Toast'
+
+const formInicial = () => ({
+  descricao: '',
+  valor: 0,
+  tipo: 'despesa',
+  data: ymd(new Date()),
+  parcelado: false,
+  numParcelas: '2',
+  efetivada: true,
+})
 
 export default function Transacoes() {
   const { profile } = useAuth()
-  const { rows: transacoes } = useRealtimeTable('transacoes', {
-    household_id: profile?.household_id
-  })
-  const { rows: profiles } = useRealtimeTable('profiles', {
-    household_id: profile?.household_id
-  })
+  const toast = useToast()
+  const hh = { household_id: profile?.household_id }
+  const { rows: transacoes } = useRealtimeTable('transacoes', hh)
+  const { rows: profiles } = useRealtimeTable('profiles', hh)
+
+  const [mes, setMes] = useState(startOfMonth())
+  const [busca, setBusca] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [descricao, setDescricao] = useState('')
-  const [valor, setValor] = useState('')
-  const [tipo, setTipo] = useState('despesa')
-  const [data, setData] = useState(new Date().toISOString().split('T')[0])
-  const [parcelado, setParcelado] = useState(false)
-  const [numParcelas, setNumParcelas] = useState('2')
-  const [efetivada, setEfetivada] = useState(true)
+  const [editId, setEditId] = useState(null)
+  const [form, setForm] = useState(formInicial())
   const [saving, setSaving] = useState(false)
+  const [confirmar, setConfirmar] = useState(null)
+
+  const set = (campo, v) => setForm((f) => ({ ...f, [campo]: v }))
+
+  const abrirNovo = () => {
+    setForm(formInicial())
+    setEditId(null)
+    setShowModal(true)
+  }
+
+  const abrirEdicao = (t) => {
+    setForm({
+      descricao: t.descricao.replace(/\s\(\d+\/\d+\)$/, ''),
+      valor: t.valor,
+      tipo: t.tipo,
+      data: t.data,
+      parcelado: false,
+      numParcelas: '2',
+      efetivada: t.efetivada,
+    })
+    setEditId(t.id)
+    setShowModal(true)
+  }
 
   const handleSave = async () => {
-    if (!descricao || !valor) return
+    if (!form.descricao || !form.valor) {
+      toast('Preencha descrição e valor', 'error')
+      return
+    }
     setSaving(true)
 
-    if (parcelado && parseInt(numParcelas) > 1) {
-      const totalParcelas = parseInt(numParcelas)
-      const valorPorParcela = parseFloat(valor) / totalParcelas
+    if (editId) {
+      const { error } = await supabase
+        .from('transacoes')
+        .update({
+          descricao: form.descricao,
+          valor: form.valor,
+          tipo: form.tipo,
+          data: form.data,
+          efetivada: form.efetivada,
+        })
+        .eq('id', editId)
+      setSaving(false)
+      if (error) return toast('Erro ao salvar', 'error')
+      toast('Lançamento atualizado')
+    } else if (form.parcelado && parseInt(form.numParcelas) > 1) {
+      const total = parseInt(form.numParcelas)
+      const valorParcela = Math.round((form.valor / total) * 100) / 100
       const grupoId = crypto.randomUUID()
-      const transacoesParaInserir = []
-
-      for (let i = 0; i < totalParcelas; i++) {
-        const dataParcela = new Date(data)
-        dataParcela.setMonth(dataParcela.getMonth() + i)
-
-        transacoesParaInserir.push({
+      const linhas = []
+      for (let i = 0; i < total; i++) {
+        const d = new Date(`${form.data}T00:00:00`)
+        d.setMonth(d.getMonth() + i)
+        linhas.push({
           household_id: profile?.household_id,
-          descricao: `${descricao} (${i + 1}/${totalParcelas})`,
-          valor: valorPorParcela,
-          tipo,
-          data: dataParcela.toISOString().split('T')[0],
+          descricao: `${form.descricao} (${i + 1}/${total})`,
+          valor: valorParcela,
+          tipo: form.tipo,
+          data: ymd(d),
           criado_por: profile?.id,
           parcela_atual: i + 1,
-          parcela_total: totalParcelas,
+          parcela_total: total,
           parcela_grupo_id: grupoId,
-          efetivada: i === 0 ? efetivada : false
+          efetivada: i === 0 ? form.efetivada : false,
         })
       }
-
-      await supabase.from('transacoes').insert(transacoesParaInserir)
+      const { error } = await supabase.from('transacoes').insert(linhas)
+      setSaving(false)
+      if (error) return toast('Erro ao salvar', 'error')
+      toast(`${total} parcelas criadas`)
     } else {
-      await supabase.from('transacoes').insert({
+      const { error } = await supabase.from('transacoes').insert({
         household_id: profile?.household_id,
-        descricao,
-        valor: parseFloat(valor),
-        tipo,
-        data,
+        descricao: form.descricao,
+        valor: form.valor,
+        tipo: form.tipo,
+        data: form.data,
         criado_por: profile?.id,
-        efetivada
+        efetivada: form.efetivada,
       })
+      setSaving(false)
+      if (error) return toast('Erro ao salvar', 'error')
+      toast('Lançamento criado')
     }
 
-    setDescricao('')
-    setValor('')
-    setTipo('despesa')
-    setData(new Date().toISOString().split('T')[0])
-    setParcelado(false)
-    setNumParcelas('2')
-    setEfetivada(true)
-    setSaving(false)
     setShowModal(false)
   }
 
-  const handleDelete = async (t) => {
+  const pedirDelete = (t) => {
+    setConfirmar({
+      transacao: t,
+      grupo: !!t.parcela_grupo_id,
+    })
+  }
+
+  const confirmarDelete = async () => {
+    const t = confirmar.transacao
     if (t.parcela_grupo_id) {
-      if (confirm(`Deletar TODAS as ${t.parcela_total} parcelas?`)) {
-        await supabase.from('transacoes').delete().eq('parcela_grupo_id', t.parcela_grupo_id)
-      }
+      await supabase.from('transacoes').delete().eq('parcela_grupo_id', t.parcela_grupo_id)
     } else {
-      if (confirm('Tem certeza que quer deletar?')) {
-        await supabase.from('transacoes').delete().eq('id', t.id)
-      }
+      await supabase.from('transacoes').delete().eq('id', t.id)
     }
+    toast('Excluído')
   }
 
   const togglePago = async (t) => {
-    await supabase
-      .from('transacoes')
-      .update({ efetivada: !t.efetivada })
-      .eq('id', t.id)
+    await supabase.from('transacoes').update({ efetivada: !t.efetivada }).eq('id', t.id)
   }
 
-  const despesas = transacoes.filter(t => t.tipo === 'despesa')
-  const receitas = transacoes.filter(t => t.tipo === 'receita')
-  const totalDespesas = despesas.reduce((sum, t) => sum + t.valor, 0)
-  const totalReceitas = receitas.reduce((sum, t) => sum + t.valor, 0)
-  const despesasPendentes = despesas.filter(t => !t.efetivada).reduce((sum, t) => sum + t.valor, 0)
+  const doMes = transacoes
+    .filter((t) => isInMonth(t.data, mes))
+    .filter((t) => t.descricao.toLowerCase().includes(busca.toLowerCase()))
+    .sort((a, b) => new Date(b.data) - new Date(a.data))
 
-  const getLancadorInfo = (criado_por) => {
-    const lancador = profiles.find(p => p.id === criado_por)
-    const isCurrentUser = criado_por === profile?.id
+  const totalReceitas = doMes.filter((t) => t.tipo === 'receita').reduce((s, t) => s + t.valor, 0)
+  const totalDespesas = doMes.filter((t) => t.tipo === 'despesa').reduce((s, t) => s + t.valor, 0)
+  const pendentes = doMes.filter((t) => t.tipo === 'despesa' && !t.efetivada).reduce((s, t) => s + t.valor, 0)
+
+  const lancadorInfo = (criado_por) => {
+    const lancador = profiles.find((p) => p.id === criado_por)
+    const ehMeu = criado_por === profile?.id
     return {
-      nome: lancador?.nome || 'Desconhecido',
-      bg: isCurrentUser ? 'bg-blue-50' : 'bg-pink-50',
-      text: isCurrentUser ? 'text-blue-700' : 'text-pink-700',
-      border: isCurrentUser ? 'border-blue-200' : 'border-pink-200'
+      nome: lancador?.nome || '—',
+      bg: ehMeu ? 'bg-blue-50' : 'bg-pink-50',
+      text: ehMeu ? 'text-blue-700' : 'text-pink-700',
+      border: ehMeu ? 'border-blue-200' : 'border-pink-200',
     }
   }
 
   return (
-    <div className="pb-24 bg-gray-50 min-h-screen">
-      <div className="bg-slate-900 text-white px-6 pt-8 pb-12">
-        <h1 className="text-2xl font-semibold mb-6">Lançamentos</h1>
-
+    <div className="pb-24 min-h-screen">
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white px-6 pt-8 pb-14">
+        <h1 className="text-2xl font-bold mb-4">Lançamentos</h1>
+        <div className="bg-white/5 rounded-xl p-3 mb-5 border border-white/10">
+          <MonthSelector value={mes} onChange={setMes} light />
+        </div>
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Receitas</p>
-            <p className="text-base font-semibold mt-1 text-emerald-400">{formatCurrency(totalReceitas)}</p>
+            <p className="text-xs text-white/50 uppercase tracking-wider">Receitas</p>
+            <p className="text-base font-bold mt-1 text-emerald-400">{formatCurrency(totalReceitas)}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Despesas</p>
-            <p className="text-base font-semibold mt-1 text-red-400">{formatCurrency(totalDespesas)}</p>
+            <p className="text-xs text-white/50 uppercase tracking-wider">Despesas</p>
+            <p className="text-base font-bold mt-1 text-red-400">{formatCurrency(totalDespesas)}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider">Pendente</p>
-            <p className="text-base font-semibold mt-1 text-amber-400">{formatCurrency(despesasPendentes)}</p>
+            <p className="text-xs text-white/50 uppercase tracking-wider">Pendente</p>
+            <p className="text-base font-bold mt-1 text-amber-400">{formatCurrency(pendentes)}</p>
           </div>
         </div>
       </div>
 
-      <div className="px-4 -mt-6">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          {transacoes.length === 0 ? (
+      <div className="px-4 -mt-8">
+        <div className="relative mb-3">
+          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Buscar lançamento..."
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl shadow-sm focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none text-sm"
+          />
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          {doMes.length === 0 ? (
             <div className="text-center py-12 px-4">
-              <p className="text-gray-500 text-sm">Nenhum lançamento ainda</p>
-              <p className="text-gray-400 text-xs mt-1">Clique no botão + para começar</p>
+              <p className="text-gray-500 text-sm">{busca ? 'Nada encontrado' : 'Nenhum lançamento neste mês'}</p>
+              <p className="text-gray-400 text-xs mt-1">Toque no + para adicionar</p>
             </div>
           ) : (
-            transacoes
-              .sort((a, b) => new Date(b.data) - new Date(a.data))
-              .map((t, index) => {
-                const lancador = getLancadorInfo(t.criado_por)
-                return (
-                  <div
-                    key={t.id}
-                    className={`flex justify-between items-center p-4 ${index !== transacoes.length - 1 ? 'border-b border-gray-100' : ''} ${!t.efetivada ? 'bg-amber-50' : ''}`}
+            doMes.map((t, i) => {
+              const l = lancadorInfo(t.criado_por)
+              const ehMeu = t.criado_por === profile?.id
+              return (
+                <div
+                  key={t.id}
+                  className={`flex items-center p-4 ${i !== doMes.length - 1 ? 'border-b border-gray-100' : ''} ${!t.efetivada ? 'bg-amber-50/60' : ''}`}
+                >
+                  <button
+                    onClick={() => togglePago(t)}
+                    className={`w-6 h-6 rounded-md border-2 flex items-center justify-center mr-3 shrink-0 transition ${
+                      t.efetivada ? 'bg-emerald-600 border-emerald-600' : 'bg-white border-gray-300 hover:border-emerald-600'
+                    }`}
                   >
-                    {/* Checkbox de pago */}
-                    <button
-                      onClick={() => togglePago(t)}
-                      className={`w-6 h-6 rounded-md border-2 flex items-center justify-center mr-3 transition ${
-                        t.efetivada
-                          ? 'bg-emerald-600 border-emerald-600'
-                          : 'bg-white border-gray-300 hover:border-emerald-600'
-                      }`}
-                    >
-                      {t.efetivada && <Check size={14} className="text-white" strokeWidth={3} />}
-                    </button>
+                    {t.efetivada && <Check size={14} className="text-white" strokeWidth={3} />}
+                  </button>
 
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <p className={`font-semibold text-sm ${t.efetivada ? 'text-gray-900' : 'text-gray-600'}`}>{t.descricao}</p>
-                        <span className={`text-xs px-2 py-0.5 rounded ${lancador.bg} ${lancador.text} border ${lancador.border}`}>
-                          {lancador.nome}
-                        </span>
-                        {!t.efetivada && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 font-semibold">
-                            Pendente
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500">{formatDate(t.data)}</p>
-                    </div>
-                    <div className="text-right flex items-center gap-3">
-                      <p className={`font-semibold ${t.tipo === 'receita' ? 'text-emerald-700' : 'text-red-700'}`}>
-                        {t.tipo === 'receita' ? '+' : '-'}{formatCurrency(t.valor)}
-                      </p>
-                      {t.criado_por === profile?.id && (
-                        <button
-                          onClick={() => handleDelete(t)}
-                          className="text-gray-400 hover:text-red-600 transition"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <p className={`font-semibold text-sm ${t.efetivada ? 'text-gray-900' : 'text-gray-600'}`}>{t.descricao}</p>
+                      <span className={`text-xs px-2 py-0.5 rounded ${l.bg} ${l.text} border ${l.border}`}>{l.nome}</span>
+                      {!t.efetivada && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 font-semibold">Pendente</span>
                       )}
                     </div>
+                    <p className="text-xs text-gray-500">{formatDate(t.data)}</p>
                   </div>
-                )
-              })
+
+                  <div className="text-right flex items-center gap-2 shrink-0">
+                    <p className={`font-bold text-sm ${t.tipo === 'receita' ? 'text-emerald-700' : 'text-red-700'}`}>
+                      {t.tipo === 'receita' ? '+' : '-'}{formatCurrency(t.valor)}
+                    </p>
+                    {ehMeu && (
+                      <>
+                        <button onClick={() => abrirEdicao(t)} className="text-gray-400 hover:text-slate-900 transition p-1">
+                          <Pencil size={15} />
+                        </button>
+                        <button onClick={() => pedirDelete(t)} className="text-gray-400 hover:text-red-600 transition p-1">
+                          <Trash2 size={15} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })
           )}
         </div>
       </div>
 
       <button
-        onClick={() => setShowModal(true)}
+        onClick={abrirNovo}
         className="fixed bottom-24 right-4 bg-slate-900 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:bg-slate-800 transition"
       >
         <Plus size={24} />
       </button>
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-end z-50">
-          <div className="bg-white w-full rounded-t-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-semibold text-gray-900">Novo lançamento</h2>
+      <Modal open={showModal} onClose={() => setShowModal(false)} title={editId ? 'Editar lançamento' : 'Novo lançamento'}>
+        <div className="flex gap-2">
+          <button
+            onClick={() => set('tipo', 'receita')}
+            className={`flex-1 py-3 rounded-lg font-semibold transition border-2 ${
+              form.tipo === 'receita' ? 'bg-emerald-50 text-emerald-700 border-emerald-600' : 'bg-white text-gray-600 border-gray-200'
+            }`}
+          >
+            Receita
+          </button>
+          <button
+            onClick={() => set('tipo', 'despesa')}
+            className={`flex-1 py-3 rounded-lg font-semibold transition border-2 ${
+              form.tipo === 'despesa' ? 'bg-red-50 text-red-700 border-red-600' : 'bg-white text-gray-600 border-gray-200'
+            }`}
+          >
+            Despesa
+          </button>
+        </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => setTipo('receita')}
-                className={`flex-1 py-3 rounded-lg font-semibold transition border-2 ${
-                  tipo === 'receita'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-600'
-                    : 'bg-white text-gray-600 border-gray-200'
-                }`}
-              >
-                Receita
-              </button>
-              <button
-                onClick={() => setTipo('despesa')}
-                className={`flex-1 py-3 rounded-lg font-semibold transition border-2 ${
-                  tipo === 'despesa'
-                    ? 'bg-red-50 text-red-700 border-red-600'
-                    : 'bg-white text-gray-600 border-gray-200'
-                }`}
-              >
-                Despesa
-              </button>
-            </div>
+        <div>
+          <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Descrição</label>
+          <input
+            type="text"
+            placeholder="Ex: Salário, Mercado"
+            value={form.descricao}
+            onChange={(e) => set('descricao', e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none mt-1"
+          />
+        </div>
 
-            <div>
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Descrição</label>
-              <input
-                type="text"
-                placeholder="Ex: Salário, Mercado"
-                value={descricao}
-                onChange={e => setDescricao(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
-              />
-            </div>
+        <div>
+          <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+            {form.parcelado ? 'Valor total' : 'Valor'}
+          </label>
+          <CurrencyInput value={form.valor} onChange={(v) => set('valor', v)} />
+        </div>
 
-            <div>
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                {parcelado ? 'Valor total' : 'Valor'}
-              </label>
-              <input
-                type="number"
-                placeholder="0,00"
-                value={valor}
-                onChange={e => setValor(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
-              />
-            </div>
+        <div>
+          <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+            {form.parcelado ? 'Data da 1ª parcela' : 'Data'}
+          </label>
+          <input
+            type="date"
+            value={form.data}
+            onChange={(e) => set('data', e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:ring-1 focus:ring-slate-900 outline-none mt-1"
+          />
+        </div>
 
-            <div>
-              <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                {parcelado ? 'Data da 1ª parcela' : 'Data'}
-              </label>
-              <input
-                type="date"
-                value={data}
-                onChange={e => setData(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
-              />
-            </div>
+        <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+          <div>
+            <label className="text-sm font-semibold text-gray-700">Já foi pago?</label>
+            <p className="text-xs text-gray-500 mt-0.5">Desmarque se for futuro</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => set('efetivada', !form.efetivada)}
+            className={`relative w-12 h-6 rounded-full transition ${form.efetivada ? 'bg-emerald-600' : 'bg-gray-300'}`}
+          >
+            <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${form.efetivada ? 'left-7' : 'left-1'}`} />
+          </button>
+        </div>
 
-            {/* Checkbox de já foi pago */}
-            <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-              <div>
-                <label className="text-sm font-semibold text-gray-700">Já foi pago?</label>
-                <p className="text-xs text-gray-500 mt-0.5">Desmarque se for uma despesa futura</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEfetivada(!efetivada)}
-                className={`relative w-12 h-6 rounded-full transition ${efetivada ? 'bg-emerald-600' : 'bg-gray-300'}`}
-              >
-                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition ${efetivada ? 'left-7' : 'left-1'}`} />
-              </button>
-            </div>
-
-            {/* Toggle parcelado */}
+        {!editId && (
+          <>
             <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
               <label className="text-sm font-semibold text-gray-700">Parcelar?</label>
               <button
                 type="button"
-                onClick={() => setParcelado(!parcelado)}
-                className={`relative w-12 h-6 rounded-full transition ${parcelado ? 'bg-slate-900' : 'bg-gray-300'}`}
+                onClick={() => set('parcelado', !form.parcelado)}
+                className={`relative w-12 h-6 rounded-full transition ${form.parcelado ? 'bg-slate-900' : 'bg-gray-300'}`}
               >
-                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition ${parcelado ? 'left-7' : 'left-1'}`} />
+                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${form.parcelado ? 'left-7' : 'left-1'}`} />
               </button>
             </div>
 
-            {parcelado && (
+            {form.parcelado && (
               <div className="space-y-3 bg-blue-50 p-4 rounded-lg border border-blue-200">
                 <div>
                   <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Número de parcelas</label>
@@ -301,38 +347,47 @@ export default function Transacoes() {
                     type="number"
                     min="2"
                     max="60"
-                    placeholder="Ex: 10"
-                    value={numParcelas}
-                    onChange={e => setNumParcelas(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 focus:outline-none mt-1"
+                    value={form.numParcelas}
+                    onChange={(e) => set('numParcelas', e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-slate-900 outline-none mt-1"
                   />
                 </div>
-                {valor && numParcelas && (
+                {form.valor > 0 && form.numParcelas && (
                   <p className="text-sm text-gray-700">
-                    <strong>{numParcelas}x</strong> de <strong>{formatCurrency(parseFloat(valor) / parseInt(numParcelas))}</strong>
+                    <strong>{form.numParcelas}x</strong> de{' '}
+                    <strong>{formatCurrency(form.valor / parseInt(form.numParcelas))}</strong>
                   </p>
                 )}
               </div>
             )}
+          </>
+        )}
 
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => setShowModal(false)}
-                className="flex-1 py-3 border border-gray-300 rounded-lg font-semibold text-gray-700 hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex-1 py-3 bg-slate-900 text-white rounded-lg font-semibold hover:bg-slate-800 transition disabled:opacity-50"
-              >
-                {saving ? 'Salvando...' : 'Salvar'}
-              </button>
-            </div>
-          </div>
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={() => setShowModal(false)}
+            className="flex-1 py-3 border border-gray-300 rounded-lg font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 py-3 bg-slate-900 text-white rounded-lg font-semibold hover:bg-slate-800 transition disabled:opacity-50"
+          >
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
         </div>
-      )}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!confirmar}
+        onClose={() => setConfirmar(null)}
+        onConfirm={confirmarDelete}
+        title="Excluir lançamento"
+        message={confirmar?.grupo ? `Isso vai excluir TODAS as ${confirmar.transacao.parcela_total} parcelas. Continuar?` : 'Tem certeza que quer excluir este lançamento?'}
+        confirmLabel="Excluir"
+      />
     </div>
   )
 }

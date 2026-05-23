@@ -49,11 +49,11 @@ export default function Onboarding() {
           <h1 className="text-2xl font-bold mb-2 text-center">Bem-vindo!</h1>
           <p className="text-gray-600 text-center mb-6">Como você quer começar?</p>
           <button onClick={() => setMode('criar')}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium mb-3 hover:bg-blue-700">
+            className="w-full bg-slate-900 text-white py-3 rounded-lg font-medium mb-3 hover:bg-slate-800">
             Criar um novo lar
           </button>
           <button onClick={() => setMode('entrar')}
-            className="w-full border-2 border-blue-600 text-blue-600 py-3 rounded-lg font-medium hover:bg-blue-50">
+            className="w-full border-2 border-slate-900 text-slate-900 py-3 rounded-lg font-medium hover:bg-slate-50">
             Entrar com código de convite
           </button>
         </div>
@@ -74,7 +74,7 @@ export default function Onboarding() {
               className="w-full px-4 py-3 border rounded-lg mb-3" />
             {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
             <button onClick={criarHousehold} disabled={loading}
-              className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
+              className="w-full bg-slate-900 text-white py-3 rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50">
               {loading ? 'Criando...' : 'Criar'}
             </button>
           </>
@@ -85,7 +85,7 @@ export default function Onboarding() {
               className="w-full px-4 py-3 border rounded-lg mb-3 uppercase" />
             {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
             <button onClick={entrarHousehold} disabled={loading}
-              className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
+              className="w-full bg-slate-900 text-white py-3 rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50">
               {loading ? 'Entrando...' : 'Entrar'}
             </button>
           </>
